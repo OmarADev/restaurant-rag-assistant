@@ -1,0 +1,10 @@
+langchain
+langchain-ollama
+langchain-chroma
+pypdf
+pillow
+pytesseract
+reportlab
+streamlit
+pandas
+numpy
