@@ -1,153 +1,197 @@
+# vector.py
+# Handles document loading, embedding, and vector database management.
+# Supports JSON (restaurant info), PDF (menus), and images (EasyOCR).
+# Each restaurant gets its own isolated Chroma collection.
+
+import os
+import json
+import glob
+
+import easyocr
+from pypdf import PdfReader
 from langchain_ollama import OllamaEmbeddings
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from PIL import Image
-from pypdf import PdfReader
 
-import os
-import pandas as pd
-import pytesseract
-import glob
+# EasyOCR reader — loaded once, reused across calls
+# Set gpu=False since most machines won't have CUDA available
+_ocr_reader = None
 
-# -----------------------------------------------
-# CONFIGURATION — swap these to change restaurant
-# -----------------------------------------------
-RESTAURANT_NAME = "Pizza Palace"
-CSV_FILENAME = "realistic_restaurant_reviews.csv"   # customer reviews
-# Any .pdf files in the project directory are auto-loaded as menu/docs
-# Any .png/.jpg images are loaded via the hardcoded image_documents list below
-# -----------------------------------------------
-
-script_dir = os.path.dirname(os.path.abspath(__file__))
+def get_ocr_reader():
+    """Lazy-load EasyOCR reader to avoid slow startup when OCR isn't needed."""
+    global _ocr_reader
+    if _ocr_reader is None:
+        print("Loading EasyOCR model (first run may download ~100MB)...")
+        _ocr_reader = easyocr.Reader(["en"], gpu=False)
+    return _ocr_reader
 
 
-# -------------------------------
-# LOAD CSV DATA (Customer Reviews)
-# -------------------------------
+def load_json_doc(json_path):
+    """Load restaurant info from a JSON file into a Document."""
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
 
-csv_path = os.path.join(script_dir, CSV_FILENAME)
-print(f"Loading CSV from: {csv_path}")
-df = pd.read_csv(csv_path)
-print(f"Loaded {len(df)} reviews from CSV")
-
-
-# -------------------------------
-# LOAD PDF DATA (Menu / Docs)
-# -------------------------------
-
-pdf_files = glob.glob(os.path.join(script_dir, "*.pdf"))
-print(f"Found {len(pdf_files)} PDF files")
-
-pdf_documents = []
-for pdf_file in pdf_files:
-    print(f"  Loading: {os.path.basename(pdf_file)}")
-    reader = PdfReader(pdf_file)
-    for page_num, page in enumerate(reader.pages):
-        text = page.extract_text()
-        pdf_documents.append({
-            "content": text,
-            "source": os.path.basename(pdf_file),
-            "page": page_num + 1
-        })
-
-print(f"Loaded {len(pdf_documents)} pages from PDFs")
-
-
-# -------------------------------
-# LOAD IMAGE DATA
-# -------------------------------
-# Note: image ingestion currently uses manually extracted text.
-# Full Tesseract OCR support is planned for a future update.
-# To add a new image, append an entry to image_documents below.
-
-image_documents = [
-    {
-        "content": (
-            "Student Discount: 10% off the total bill with a valid college ID. "
-            "Offer applies all day, every day, for groups up to 4 students."
-        ),
-        "source": "student_discount.png",
+    # Format all fields into readable text for embedding
+    lines = []
+    field_labels = {
+        "name": "Restaurant name",
+        "cuisine": "Cuisine type",
+        "opening_hours": "Opening hours",
+        "phone": "Phone",
+        "website": "Website",
+        "address": "Address",
     }
-]
+    for key, label in field_labels.items():
+        value = data.get(key, "Not available")
+        lines.append(f"{label}: {value}")
 
-print(f"Loaded {len(image_documents)} image document(s)")
+    content = "\n".join(lines)
+    return Document(
+        page_content=content,
+        metadata={"source": "INFO", "filename": os.path.basename(json_path)}
+    )
 
 
-# -------------------------------
-# EMBEDDINGS
-# -------------------------------
+def load_pdf_docs(pdf_path):
+    """Extract text from each page of a PDF and return as Documents."""
+    docs = []
+    reader = PdfReader(pdf_path)
+    for page_num, page in enumerate(reader.pages):
+        text = page.extract_text() or ""
+        if text.strip():
+            docs.append(Document(
+                page_content=text,
+                metadata={
+                    "source": "MENU (PDF)",
+                    "filename": os.path.basename(pdf_path),
+                    "page": page_num + 1
+                }
+            ))
+    return docs
 
-embeddings = OllamaEmbeddings(model="all-minilm")
+
+def load_image_doc(image_path):
+    """Extract text from an image using EasyOCR and return as a Document."""
+    reader = get_ocr_reader()
+    results = reader.readtext(image_path, detail=0)  # detail=0 returns text only
+    text = " ".join(results).strip()
+
+    if not text:
+        print(f"  Warning: no text extracted from {os.path.basename(image_path)}")
+        return None
+
+    return Document(
+        page_content=text,
+        metadata={
+            "source": "IMAGE",
+            "filename": os.path.basename(image_path)
+        }
+    )
 
 
-# -------------------------------
-# VECTOR DATABASE (Chroma)
-# -------------------------------
-
-db_location = os.path.join(script_dir, "chrome_langchain_db")
-add_documents = not os.path.exists(db_location)
-
-if add_documents:
-    print("Creating vector database...")
-
+def build_vector_store(restaurant_folder):
+    """
+    Load all documents from a restaurant folder and build a Chroma vector store.
+    Folder structure expected:
+        data/<city>/<restaurant>/
+            info.json         — restaurant info (required)
+            *.pdf             — menus (optional)
+            *.png / *.jpg     — images, e.g. menu photos (optional)
+    """
     documents = []
     ids = []
     doc_id = 0
 
-    # CSV reviews
-    for i, row in df.iterrows():
-        document = Document(
-            page_content=row["Title"] + " " + row["Review"],
-            metadata={"rating": row["Rating"], "date": row["Date"], "source": "CSV"},
-            id=str(doc_id)
-        )
+    print(f"\nLoading documents from: {restaurant_folder}")
+
+    # Load info.json
+    json_files = glob.glob(os.path.join(restaurant_folder, "info.json"))
+    for path in json_files:
+        doc = load_json_doc(path)
+        documents.append(doc)
         ids.append(str(doc_id))
-        documents.append(document)
         doc_id += 1
+        print(f"  Loaded info: {os.path.basename(path)}")
 
-    # PDF pages
-    for pdf_doc in pdf_documents:
-        document = Document(
-            page_content=pdf_doc["content"],
-            metadata={"source": "PDF", "filename": pdf_doc["source"], "page": pdf_doc["page"]},
-            id=str(doc_id)
+    # Load PDFs
+    pdf_files = glob.glob(os.path.join(restaurant_folder, "*.pdf"))
+    for path in pdf_files:
+        docs = load_pdf_docs(path)
+        for doc in docs:
+            documents.append(doc)
+            ids.append(str(doc_id))
+            doc_id += 1
+        print(f"  Loaded PDF: {os.path.basename(path)} ({len(docs)} pages)")
+
+    # Load images via EasyOCR
+    image_files = []
+    for ext in ("*.png", "*.jpg", "*.jpeg"):
+        image_files.extend(glob.glob(os.path.join(restaurant_folder, ext)))
+
+    for path in image_files:
+        print(f"  Processing image: {os.path.basename(path)}")
+        doc = load_image_doc(path)
+        if doc:
+            documents.append(doc)
+            ids.append(str(doc_id))
+            doc_id += 1
+
+    if not documents:
+        raise ValueError(f"No documents found in {restaurant_folder}")
+
+    print(f"  Total documents: {len(documents)}")
+
+    # Build Chroma vector store
+    # Each restaurant gets its own DB folder to keep them isolated
+    db_location = os.path.join(restaurant_folder, ".vector_db")
+    embeddings = OllamaEmbeddings(model="all-minilm")
+
+    if os.path.exists(db_location):
+        print("  Loading existing vector database...")
+        vector_store = Chroma(
+            collection_name="restaurant",
+            persist_directory=db_location,
+            embedding_function=embeddings
         )
-        ids.append(str(doc_id))
-        documents.append(document)
-        doc_id += 1
-
-    # Image text
-    for img_doc in image_documents:
-        document = Document(
-            page_content=img_doc["content"],
-            metadata={"source": "IMAGE", "filename": img_doc["source"]},
-            id=str(doc_id)
+    else:
+        print("  Creating vector database...")
+        vector_store = Chroma(
+            collection_name="restaurant",
+            persist_directory=db_location,
+            embedding_function=embeddings
         )
-        ids.append(str(doc_id))
-        documents.append(document)
-        doc_id += 1
+        vector_store.add_documents(documents=documents, ids=ids)
 
-    vector_store = Chroma(
-        collection_name="restaurant_reviews",
-        persist_directory=db_location,
-        embedding_function=embeddings
-    )
-    vector_store.add_documents(documents=documents, ids=ids)
-    print(f"Vector database created with {len(documents)} documents")
-
-else:
-    print("Loading existing vector database...")
-    vector_store = Chroma(
-        collection_name="restaurant_reviews",
-        persist_directory=db_location,
-        embedding_function=embeddings
-    )
+    retriever = vector_store.as_retriever(search_kwargs={"k": 5})
+    return retriever
 
 
-# -------------------------------
-# RETRIEVER
-# -------------------------------
+def get_available_restaurants(data_dir="data"):
+    """
+    Scan the data/ directory and return all available restaurants.
+    Returns a dict: { "City > Restaurant Name": folder_path }
+    """
+    options = {}
+    if not os.path.exists(data_dir):
+        return options
 
-retriever = vector_store.as_retriever(
-    search_kwargs={"k": 5}
-)
+    for city in sorted(os.listdir(data_dir)):
+        city_path = os.path.join(data_dir, city)
+        if not os.path.isdir(city_path):
+            continue
+        for restaurant in sorted(os.listdir(city_path)):
+            r_path = os.path.join(city_path, restaurant)
+            if not os.path.isdir(r_path):
+                continue
+            # Only show folders that have an info.json
+            if os.path.exists(os.path.join(r_path, "info.json")):
+                # Load name from JSON for display
+                try:
+                    with open(os.path.join(r_path, "info.json")) as f:
+                        info = json.load(f)
+                    display_name = f"{city.replace('_', ' ').title()} › {info.get('name', restaurant)}"
+                except Exception:
+                    display_name = f"{city} › {restaurant}"
+                options[display_name] = r_path
+
+    return options

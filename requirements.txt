@@ -2,9 +2,9 @@ langchain
 langchain-ollama
 langchain-chroma
 pypdf
-pillow
-pytesseract
+easyocr
 reportlab
 streamlit
 pandas
 numpy
+requests
