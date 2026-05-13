@@ -1,0 +1,25 @@
+version: "3.9"
+
+services:
+  ollama:
+    image: ollama/ollama
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama  # persist downloaded models across restarts
+
+  app:
+    build: .
+    container_name: rag-app
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data  # restaurant data lives on your machine, not in the image
+    depends_on:
+      - ollama
+    environment:
+      - OLLAMA_HOST=http://ollama:11434  # "ollama" resolves to the ollama container
+
+volumes:
+  ollama_data:

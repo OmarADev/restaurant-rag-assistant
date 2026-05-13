@@ -1,5 +1,5 @@
-# Vector databases (auto-generated per restaurant)
-data/**/.vector_db/
+# Restaurant data and vector databases (auto-generated, user-specific)
+data/
 
 # Python
 __pycache__/

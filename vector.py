@@ -7,6 +7,8 @@ import os
 import json
 import glob
 
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+
 import easyocr
 from pypdf import PdfReader
 from langchain_ollama import OllamaEmbeddings
@@ -144,7 +146,7 @@ def build_vector_store(restaurant_folder):
     # Build Chroma vector store
     # Each restaurant gets its own DB folder to keep them isolated
     db_location = os.path.join(restaurant_folder, ".vector_db")
-    embeddings = OllamaEmbeddings(model="all-minilm")
+    embeddings = OllamaEmbeddings(model="all-minilm", base_url=OLLAMA_HOST)
 
     if os.path.exists(db_location):
         print("  Loading existing vector database...")

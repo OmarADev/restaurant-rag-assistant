@@ -4,6 +4,7 @@
 # Answers are grounded in that restaurant's documents only.
 # Source indicators show which document type each answer came from.
 
+import os
 import streamlit as st
 from langchain_ollama.llms import OllamaLLM
 from langchain_core.prompts import ChatPromptTemplate
@@ -17,7 +18,8 @@ st.set_page_config(
 )
 
 # ---- LLM setup ----
-model = OllamaLLM(model="llama3.2")
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+model = OllamaLLM(model="llama3.2", base_url=OLLAMA_HOST)
 
 PROMPT_TEMPLATE = """
 You are a helpful assistant answering questions about a restaurant.
