@@ -43,7 +43,37 @@ A Retrieval-Augmented Generation (RAG) chatbot that answers questions about real
 
 ## Setup
 
-### 1. Install Ollama and pull models
+### Option A — Docker (recommended)
+
+Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/).
+
+```bash
+git clone https://github.com/OmarADev/restaurant-rag-assistant.git
+cd restaurant-rag-assistant
+docker compose up --build
+```
+
+On first run, pull the models into the Ollama container:
+
+```bash
+docker exec -it ollama ollama pull llama3.2
+docker exec -it ollama ollama pull all-minilm
+```
+
+Then fetch restaurant data:
+
+```bash
+docker exec -it rag-app python fetch_restaurant.py
+# Enter a city name when prompted (e.g. Berlin, Munich, London)
+```
+
+Open **http://localhost:8501**. Restaurant data is stored in `./data/` on your machine and persists across restarts.
+
+---
+
+### Option B — Local Python
+
+#### 1. Install Ollama and pull models
 
 ```bash
 # Install Ollama: https://ollama.com/download
@@ -51,7 +81,7 @@ ollama pull llama3.2
 ollama pull all-minilm
 ```
 
-### 2. Clone and install dependencies
+#### 2. Clone and install dependencies
 
 ```bash
 git clone https://github.com/OmarADev/restaurant-rag-assistant.git
@@ -66,14 +96,14 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Fetch restaurant data
+#### 3. Fetch restaurant data
 
 ```bash
 python fetch_restaurant.py
 # Enter a city name when prompted (e.g. Berlin, Munich, London)
 ```
 
-### 4. (Optional) Add a menu
+#### 4. (Optional) Add a menu
 
 Drop a PDF or image of the menu into the restaurant's data folder:
 ```
@@ -82,7 +112,7 @@ data/<city>/<restaurant_slug>/menu.png
 ```
 Delete the `.vector_db` folder inside that restaurant's directory to force a rebuild on next launch.
 
-### 5. Launch the app
+#### 5. Launch the app
 
 ```bash
 streamlit run app.py
@@ -97,6 +127,8 @@ restaurant-rag-assistant/
 ├── app.py                  # Streamlit UI + LangChain chain
 ├── vector.py               # Document loading, EasyOCR, Chroma setup
 ├── fetch_restaurant.py     # Fetches real restaurants from OpenStreetMap
+├── Dockerfile              # App container image
+├── docker-compose.yml      # Orchestrates app + Ollama containers
 ├── requirements.txt
 ├── .gitignore
 └── data/                   # Auto-created by fetch_restaurant.py
